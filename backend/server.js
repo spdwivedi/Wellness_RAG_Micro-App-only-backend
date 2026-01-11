@@ -14,12 +14,13 @@ app.use(cors());
 // --- CONFIGURATION ---
 const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY);
 
-// 1. MODEL STRATEGY: "Cutting Edge -> High Speed -> Reliable Stable"
-// The code will try these in order. If one fails/timeouts, it moves to the next.
+// 1. MODEL STRATEGY
+// Note: If 'gemini-2.5-flash' does not exist yet in your region, 
+// the code will automatically fall back to the others.
 const modelsToTry = [
-    "gemini-2.5-flash",      // 🌟 PRIMARY: The newest model you see in AI Studio
-    "gemini-2.0-flash-exp",  // 🚀 BACKUP 1: High-speed experimental
-    "gemini-1.5-flash"       // 🛡️ BACKUP 2: Rock-solid stability
+    "gemini-2.5-flash",      // Primary
+    "gemini-2.0-flash-exp",  // Backup 1
+    "gemini-1.5-flash"       // Backup 2
 ];
 
 const embeddingModel = genAI.getGenerativeModel({ model: "text-embedding-004" });
@@ -31,7 +32,7 @@ mongoose.connect(process.env.MONGO_URI).then(() => console.log("🍃 MongoDB Con
 // --- CUSTOM SAFETY KEYWORDS ---
 const UNSAFE_KEYWORDS = ["pregnant", "trimester", "surgery", "hernia", "glaucoma", "blood pressure", "fracture", "pain", "injury"];
 
-// --- HELPER FUNCTION: SMART FALLBACK ---
+// --- HELPER FUNCTION: SMART FALLBACK (FIXED) ---
 async function generateWithFallback(systemInstruction, fullPrompt) {
   for (const modelName of modelsToTry) {
     try {
@@ -44,19 +45,30 @@ async function generateWithFallback(systemInstruction, fullPrompt) {
         ]
       });
 
-      const result = await model.generateContent([
-        { role: "user", parts: [{ text: systemInstruction + "\n\n" + fullPrompt }] }
-      ]);
+      // FIX: Pass the text directly as a string or simple object. 
+      // Do NOT wrap it in { role: "user", parts: [...] } for generateContent.
+      const result = await model.generateContent({
+        contents: [
+          {
+            role: 'user',
+            parts: [
+              { text: systemInstruction + "\n\n" + fullPrompt }
+            ]
+          }
+        ]
+      });
       
-      return result.response.text(); // Success! Return immediately.
+      return result.response.text(); 
       
     } catch (error) {
-      console.warn(`⚠️ ${modelName} failed or is meditating. Error: ${error.message}`);
-      console.warn(`🔄 Switching to next backup model...`);
-      // Loop continues to the next model automatically
+      console.warn(`⚠️ ${modelName} failed. Error: ${error.message}`);
+      // Only log the fallback if we have more models to try
+      if (modelsToTry.indexOf(modelName) < modelsToTry.length - 1) {
+          console.warn(`🔄 Switching to next backup model...`);
+      }
     }
   }
-  throw new Error("All AI Gurus (2.5, 2.0, and 1.5) are currently meditating. Please try again later.");
+  throw new Error("All AI Gurus are currently meditating. Please try again later.");
 }
 
 app.post('/ask', async (req, res) => {
@@ -74,7 +86,7 @@ app.post('/ask', async (req, res) => {
       }
     });
 
-    // 2. Embed User Query (Gemini)
+    // 2. Embed User Query
     const result = await embeddingModel.embedContent(query);
     const vector = result.embedding.values;
 
@@ -104,7 +116,7 @@ app.post('/ask', async (req, res) => {
 
     const fullPrompt = `Context:\n${context}\n\nUser Question:\n${query}`;
 
-    // 5. Generate Answer (Using The 3-Model Fallback)
+    // 5. Generate Answer
     const answer = await generateWithFallback(systemInstruction, fullPrompt);
 
     // 6. Log to MongoDB
